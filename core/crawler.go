@@ -355,26 +355,9 @@ func (crawler *Crawler) ParseSiteMap() {
 		// Ignore error when that not valid sitemap.xml path
 		Logger.Infof("Trying to find %s", crawler.site.String()+path)
 		_ = sitemap.ParseFromSite(crawler.site.String()+path, func(entry sitemap.Entry) error {
-			outputFormat := fmt.Sprintf("[sitemap] - %s", entry.GetLocation())
-
-			if crawler.JsonOutput {
-				sout := SpiderOutput{
-					Input:      crawler.Input,
-					Source:     "sitemap",
-					OutputType: "url",
-					Output:     entry.GetLocation(),
-				}
-				if data, err := jsoniter.MarshalToString(sout); err == nil {
-					outputFormat = data
-				}
-			} else if crawler.Quiet {
-				outputFormat = entry.GetLocation()
-			}
-			fmt.Println(outputFormat)
-			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
-			}
-			_ = crawler.C.Visit(entry.GetLocation())
+			url := entry.GetLocation()
+			crawler.outputFormat("sitemap", url)
+			_ = crawler.C.Visit(url)
 			return nil
 		})
 	}
@@ -403,29 +386,48 @@ func (crawler *Crawler) ParseRobots() {
 				if url == "" {
 					continue
 				}
-				outputFormat := fmt.Sprintf("[robots] - %s", url)
-
-				if crawler.JsonOutput {
-					sout := SpiderOutput{
-						Input:      crawler.Input,
-						Source:     "robots",
-						OutputType: "url",
-						Output:     url,
-					}
-					if data, err := jsoniter.MarshalToString(sout); err == nil {
-						outputFormat = data
-					}
-				} else if crawler.Quiet {
-					outputFormat = url
-				}
-				fmt.Println(outputFormat)
-				if crawler.Output != nil {
-					crawler.Output.WriteToFile(outputFormat)
-				}
+				crawler.outputFormat("robots", url)
 				_ = crawler.C.Visit(url)
 			}
 		}
 	}
+}
+
+func (crawler *Crawler) ParseOtherSources(includeSubs bool, includeOtherSourceResult bool) {
+	urls := OtherSources(crawler.site.Hostname(), includeSubs)
+	for _, url := range urls {
+		url = strings.TrimSpace(url)
+		if len(url) == 0 {
+			continue
+		}
+
+		if includeOtherSourceResult {
+			crawler.outputFormat("other-sources", url)
+		}
+		_ = crawler.C.Visit(url)
+	}
+}
+
+func (crawler *Crawler) outputFormat(source string, output string) {
+	outputFormat := fmt.Sprintf("[%s] - %s", source, output)
+	if crawler.JsonOutput {
+		sout := SpiderOutput{
+			Input:      crawler.Input,
+			Source:     source,
+			OutputType: "url",
+			Output:     output,
+		}
+		if data, err := jsoniter.MarshalToString(sout); err == nil {
+			outputFormat = data
+		}
+	} else if crawler.Quiet {
+		outputFormat = output
+	}
+	fmt.Println(outputFormat)
+	if crawler.Output != nil {
+		crawler.Output.WriteToFile(outputFormat)
+	}
+
 }
 
 // Find subdomains from response
