@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	jsoniter "github.com/json-iterator/go"
-
 	"github.com/benji-bou/gospider/core"
 
 	"github.com/sirupsen/logrus"
@@ -173,50 +171,27 @@ func run(cmd *cobra.Command, _ []string) {
 				// Brute force Sitemap path
 				if sitemap {
 					siteWg.Add(1)
-					go core.ParseSiteMap(site, crawler, crawler.C, &siteWg)
+					go func(crawler *core.Crawler) {
+						crawler.ParseSiteMap()
+						siteWg.Done()
+					}(crawler)
 				}
 
 				// Find Robots.txt
 				if robots {
 					siteWg.Add(1)
-					go core.ParseRobots(site, crawler, crawler.C, &siteWg)
+					go func(crawler *core.Crawler) {
+						crawler.ParseRobots()
+						siteWg.Done()
+					}(crawler)
+
 				}
 
 				if otherSource {
 					siteWg.Add(1)
 					go func() {
 						defer siteWg.Done()
-						urls := core.OtherSources(site.Hostname(), includeSubs)
-						for _, url := range urls {
-							url = strings.TrimSpace(url)
-							if len(url) == 0 {
-								continue
-							}
-
-							outputFormat := fmt.Sprintf("[other-sources] - %s", url)
-							if includeOtherSourceResult {
-								if crawler.JsonOutput {
-									sout := core.SpiderOutput{
-										Input:      crawler.Input,
-										Source:     "other-sources",
-										OutputType: "url",
-										Output:     url,
-									}
-									if data, err := jsoniter.MarshalToString(sout); err == nil {
-										outputFormat = data
-									}
-								} else if crawler.Quiet {
-									outputFormat = url
-								}
-								fmt.Println(outputFormat)
-
-								if crawler.Output != nil {
-									crawler.Output.WriteToFile(outputFormat)
-								}
-							}
-
-							_ = crawler.C.Visit(url)
-						}
+						crawler.ParseOtherSources(includeSubs)
 					}()
 				}
 				siteWg.Wait()
