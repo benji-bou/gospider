@@ -3,14 +3,15 @@ package main
 import (
 	"bufio"
 	"fmt"
-	jsoniter "github.com/json-iterator/go"
-	"io/ioutil"
+	"io"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 
-	"github.com/jaeles-project/gospider/core"
+	jsoniter "github.com/json-iterator/go"
+
+	"github.com/benji-bou/gospider/core"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -34,7 +35,7 @@ func main() {
 	commands.Flags().StringP("blacklist", "", "", "Blacklist URL Regex")
 	commands.Flags().StringP("whitelist", "", "", "Whitelist URL Regex")
 	commands.Flags().StringP("whitelist-domain", "", "", "Whitelist Domain")
-    commands.Flags().StringP("filter-length", "L", "", "Turn on length filter")
+	commands.Flags().StringP("filter-length", "L", "", "Turn on length filter")
 
 	commands.Flags().IntP("threads", "t", 1, "Number of threads (Run sites in parallel)")
 	commands.Flags().IntP("concurrent", "c", 5, "The number of the maximum allowed concurrent requests of the matching domains")
@@ -50,7 +51,7 @@ func main() {
 	commands.Flags().BoolP("other-source", "a", false, "Find URLs from 3rd party (Archive.org, CommonCrawl.org, VirusTotal.com, AlienVault.com)")
 	commands.Flags().BoolP("include-subs", "w", false, "Include subdomains crawled from 3rd party. Default is main domain")
 	commands.Flags().BoolP("include-other-source", "r", false, "Also include other-source's urls (still crawl and request)")
-    commands.Flags().BoolP("subs", "", false, "Include subdomains")
+	commands.Flags().BoolP("subs", "", false, "Include subdomains")
 
 	commands.Flags().BoolP("debug", "", false, "Turn on debug mode")
 	commands.Flags().BoolP("json", "", false, "Enable JSON output")
@@ -58,9 +59,8 @@ func main() {
 	commands.Flags().BoolP("quiet", "q", false, "Suppress all the output and only show URL")
 	commands.Flags().BoolP("no-redirect", "", false, "Disable redirect")
 	commands.Flags().BoolP("version", "", false, "Check version")
-    commands.Flags().BoolP("length", "l", false, "Turn on length")
-    commands.Flags().BoolP("raw", "R", false, "Enable raw output")
-
+	commands.Flags().BoolP("length", "l", false, "Turn on length")
+	commands.Flags().BoolP("raw", "R", false, "Enable raw output")
 
 	commands.Flags().SortFlags = false
 	if err := commands.Execute(); err != nil {
@@ -86,7 +86,7 @@ func run(cmd *cobra.Command, _ []string) {
 
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	if !verbose && !isDebug {
-		core.Logger.SetOutput(ioutil.Discard)
+		core.Logger.SetOutput(io.Discard)
 	}
 
 	// Create output folder when save file option selected
@@ -163,7 +163,7 @@ func run(cmd *cobra.Command, _ []string) {
 
 				var siteWg sync.WaitGroup
 
-				crawler := core.NewCrawler(site, cmd)
+				crawler := NewCobraCrawler(site, cmd)
 				siteWg.Add(1)
 				go func() {
 					defer siteWg.Done()
@@ -241,4 +241,83 @@ func Examples() {
 	h += `gospider -s "https://target.com/" -o output -c 10 -d 1 --other-source` + "\n"
 	h += `echo 'http://target.com | gospider -o output -c 10 -d 1 --other-source` + "\n"
 	fmt.Println(h)
+}
+
+func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
+	// Setup Crawler Options based on cobra flags
+	opt := make([]core.CrawlerOption, 0, 8)
+	maxDepth, _ := cmd.Flags().GetInt("depth")
+	opt = append(opt, core.WithDefaultColly(maxDepth))
+	quiet, _ := cmd.Flags().GetBool("quiet")
+	opt = append(opt, core.WithQuiet(quiet))
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+	opt = append(opt, core.WithJsonOutput(jsonOutput))
+	length, _ := cmd.Flags().GetBool("length")
+	opt = append(opt, core.WithLength(length))
+	raw, _ := cmd.Flags().GetBool("raw")
+	opt = append(opt, core.WithRaw(raw))
+	outputFolder, _ := cmd.Flags().GetString("output")
+	if outputFolder != "" {
+		opt = append(opt, core.WithOuput(outputFolder))
+	}
+	filterLength, _ := cmd.Flags().GetString("filter-length")
+	if filterLength != "" {
+		opt = append(opt, core.WithFilterLength(filterLength))
+	}
+
+	//set up HTTPClient Options based on cobra flags. Those options will be added to the CollyConfigurator
+	clientHTTPOpt := make([]core.HTTPClientConfigurator, 0, 3)
+	proxy, _ := cmd.Flags().GetString("proxy")
+	if proxy != "" {
+		clientHTTPOpt = append(clientHTTPOpt, core.WithHTTPProxy(proxy))
+	}
+	timeout, _ := cmd.Flags().GetInt("timeout")
+	clientHTTPOpt = append(clientHTTPOpt, core.WithHTTPTimeout(timeout))
+	noRedirect, _ := cmd.Flags().GetBool("no-redirect")
+	if noRedirect {
+		clientHTTPOpt = append(clientHTTPOpt, core.WithHTTPNoRedirect())
+	}
+
+	//CollyConfiguration Options
+	collyConfig := make([]core.CollyConfigurator, 0, 11)
+	//Adding client Options to colly configuration options
+	collyConfig = append(collyConfig, core.WithHTTPClientOpt(clientHTTPOpt...))
+	burpFile, _ := cmd.Flags().GetString("burp")
+	if burpFile != "" {
+		collyConfig = append(collyConfig, core.WithBurpFile(burpFile))
+	}
+	cookie, _ := cmd.Flags().GetString("cookie")
+	if cookie != "" && burpFile == "" {
+		collyConfig = append(collyConfig, core.WithCookie(cookie))
+	}
+	headers, _ := cmd.Flags().GetStringArray("header")
+	if burpFile == "" {
+		collyConfig = append(collyConfig, core.WithHeader(headers...))
+	}
+	randomUA, _ := cmd.Flags().GetString("user-agent")
+	collyConfig = append(collyConfig, core.WithUserAgent(randomUA))
+	subs, _ := cmd.Flags().GetBool("subs")
+	collyConfig = append(collyConfig, core.WithSubs(subs))
+	concurrent, _ := cmd.Flags().GetInt("concurrent")
+	delay, _ := cmd.Flags().GetInt("delay")
+	randomDelay, _ := cmd.Flags().GetInt("random-delay")
+	collyConfig = append(collyConfig, core.WithLimit(concurrent, delay, randomDelay))
+	collyConfig = append(collyConfig, core.WithDefaultDisalowedRegexp())
+	blacklists, _ := cmd.Flags().GetString("blacklist")
+	if blacklists != "" {
+		collyConfig = append(collyConfig, core.WithDisallowedRegexFilter(blacklists))
+	}
+	whiteLists, _ := cmd.Flags().GetString("whitelist")
+	if whiteLists != "" {
+		collyConfig = append(collyConfig, core.WithRegexpFilter(whiteLists))
+	}
+	whiteListDomain, _ := cmd.Flags().GetString("whitelist-domain")
+	if whiteListDomain != "" {
+		collyConfig = append(collyConfig, core.WithRegexpFilter(whiteListDomain))
+	}
+
+	//Adding CollyConfigurations to the crawler options
+	opt = append(opt, core.WithCollyConfig(collyConfig...))
+
+	return core.NewCrawler(site)
 }
