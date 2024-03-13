@@ -234,15 +234,6 @@ func run(cmd *cobra.Command, _ []string) {
 	core.Logger.Info("Done.")
 }
 
-func Examples() {
-	h := "\n\nExamples Command:\n"
-	h += `gospider -q -s "https://target.com/"` + "\n"
-	h += `gospider -s "https://target.com/" -o output -c 10 -d 1` + "\n"
-	h += `gospider -s "https://target.com/" -o output -c 10 -d 1 --other-source` + "\n"
-	h += `echo 'http://target.com | gospider -o output -c 10 -d 1 --other-source` + "\n"
-	fmt.Println(h)
-}
-
 func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
 	// Setup Crawler Options based on cobra flags
 	opt := make([]core.CrawlerOption, 0, 8)
@@ -320,4 +311,13 @@ func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
 	opt = append(opt, core.WithCollyConfig(collyConfig...))
 
 	return core.NewCrawler(site)
+}
+
+func Examples() {
+	h := "\n\nExamples Command:\n"
+	h += `gospider -q -s "https://target.com/"` + "\n"
+	h += `gospider -s "https://target.com/" -o output -c 10 -d 1` + "\n"
+	h += `gospider -s "https://target.com/" -o output -c 10 -d 1 --other-source` + "\n"
+	h += `echo 'http://target.com | gospider -o output -c 10 -d 1 --other-source` + "\n"
+	fmt.Println(h)
 }
