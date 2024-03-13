@@ -3,14 +3,17 @@ package core
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
+	sitemap "github.com/oxffaa/gopher-parse-sitemap"
 
 	"github.com/benji-bou/gospider/stringset"
 	"github.com/gocolly/colly/v2"
@@ -340,6 +343,88 @@ func (crawler *Crawler) Start(linkfinder bool) {
 	err := crawler.C.Visit(crawler.site.String())
 	if err != nil {
 		Logger.Errorf("Failed to start %s: %s", crawler.site.String(), err)
+	}
+}
+
+func (crawler *Crawler) ParseSiteMap() {
+	sitemapUrls := []string{"/sitemap.xml", "/sitemap_news.xml", "/sitemap_index.xml", "/sitemap-index.xml", "/sitemapindex.xml",
+		"/sitemap-news.xml", "/post-sitemap.xml", "/page-sitemap.xml", "/portfolio-sitemap.xml", "/home_slider-sitemap.xml", "/category-sitemap.xml",
+		"/author-sitemap.xml"}
+
+	for _, path := range sitemapUrls {
+		// Ignore error when that not valid sitemap.xml path
+		Logger.Infof("Trying to find %s", crawler.site.String()+path)
+		_ = sitemap.ParseFromSite(crawler.site.String()+path, func(entry sitemap.Entry) error {
+			outputFormat := fmt.Sprintf("[sitemap] - %s", entry.GetLocation())
+
+			if crawler.JsonOutput {
+				sout := SpiderOutput{
+					Input:      crawler.Input,
+					Source:     "sitemap",
+					OutputType: "url",
+					Output:     entry.GetLocation(),
+				}
+				if data, err := jsoniter.MarshalToString(sout); err == nil {
+					outputFormat = data
+				}
+			} else if crawler.Quiet {
+				outputFormat = entry.GetLocation()
+			}
+			fmt.Println(outputFormat)
+			if crawler.Output != nil {
+				crawler.Output.WriteToFile(outputFormat)
+			}
+			_ = crawler.C.Visit(entry.GetLocation())
+			return nil
+		})
+	}
+}
+
+func (crawler *Crawler) ParseRobots() {
+	robotsURL := crawler.site.String() + "/robots.txt"
+
+	resp, err := http.Get(robotsURL)
+	if err != nil {
+		return
+	}
+	if resp.StatusCode == 200 {
+		Logger.Infof("Found robots.txt: %s", robotsURL)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return
+		}
+		lines := strings.Split(string(body), "\n")
+
+		var re = regexp.MustCompile(".*llow: ")
+		for _, line := range lines {
+			if strings.Contains(line, "llow: ") {
+				url := re.ReplaceAllString(line, "")
+				url = FixUrl(crawler.site, url)
+				if url == "" {
+					continue
+				}
+				outputFormat := fmt.Sprintf("[robots] - %s", url)
+
+				if crawler.JsonOutput {
+					sout := SpiderOutput{
+						Input:      crawler.Input,
+						Source:     "robots",
+						OutputType: "url",
+						Output:     url,
+					}
+					if data, err := jsoniter.MarshalToString(sout); err == nil {
+						outputFormat = data
+					}
+				} else if crawler.Quiet {
+					outputFormat = url
+				}
+				fmt.Println(outputFormat)
+				if crawler.Output != nil {
+					crawler.Output.WriteToFile(outputFormat)
+				}
+				_ = crawler.C.Visit(url)
+			}
+		}
 	}
 }
 
