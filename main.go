@@ -159,44 +159,8 @@ func run(cmd *cobra.Command, _ []string) {
 					continue
 				}
 
-				var siteWg sync.WaitGroup
-
 				crawler := NewCobraCrawler(site, cmd)
-				siteWg.Add(1)
-				go func() {
-					defer siteWg.Done()
-					crawler.Start(linkfinder)
-				}()
-
-				// Brute force Sitemap path
-				if sitemap {
-					siteWg.Add(1)
-					go func(crawler *core.Crawler) {
-						crawler.ParseSiteMap()
-						siteWg.Done()
-					}(crawler)
-				}
-
-				// Find Robots.txt
-				if robots {
-					siteWg.Add(1)
-					go func(crawler *core.Crawler) {
-						crawler.ParseRobots()
-						siteWg.Done()
-					}(crawler)
-
-				}
-
-				if otherSource {
-					siteWg.Add(1)
-					go func() {
-						defer siteWg.Done()
-						crawler.ParseOtherSources(includeSubs)
-					}()
-				}
-				siteWg.Wait()
-				crawler.C.Wait()
-				crawler.LinkFinderCollector.Wait()
+				crawler.StartAll(linkfinder, sitemap, robots, otherSource, includeSubs, includeOtherSourceResult)
 			}
 		}()
 	}

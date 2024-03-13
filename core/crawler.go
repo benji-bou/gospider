@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
@@ -146,6 +147,39 @@ func (crawler *Crawler) feedLinkfinder(jsFileUrl string, OutputType string, sour
 		_ = crawler.LinkFinderCollector.Visit(jsFileUrl)
 
 	}
+}
+
+func (crawler *Crawler) StartAll(linkfinder bool, sitemap bool, robots bool, otherSource, includeSubs, includeOtherSourceResult bool) {
+	var gr sync.WaitGroup
+	gr.Add(1)
+	go func() {
+		crawler.Start(linkfinder)
+		gr.Done()
+	}()
+	if sitemap {
+		gr.Add(1)
+		go func() {
+			crawler.ParseSiteMap()
+			gr.Done()
+		}()
+	}
+	if robots {
+		gr.Add(1)
+		go func() {
+			crawler.ParseRobots()
+			gr.Done()
+		}()
+	}
+	if otherSource {
+		gr.Add(1)
+		go func() {
+			crawler.ParseOtherSources(includeSubs, includeOtherSourceResult)
+			gr.Done()
+		}()
+	}
+	gr.Wait()
+	crawler.C.Wait()
+	crawler.LinkFinderCollector.Wait()
 }
 
 func (crawler *Crawler) Start(linkfinder bool) {
@@ -356,7 +390,7 @@ func (crawler *Crawler) ParseSiteMap() {
 		Logger.Infof("Trying to find %s", crawler.site.String()+path)
 		_ = sitemap.ParseFromSite(crawler.site.String()+path, func(entry sitemap.Entry) error {
 			url := entry.GetLocation()
-			crawler.outputFormat("sitemap", url)
+			crawler.outputFormat("sitemap", url, "url", "sitemap")
 			_ = crawler.C.Visit(url)
 			return nil
 		})
@@ -386,7 +420,7 @@ func (crawler *Crawler) ParseRobots() {
 				if url == "" {
 					continue
 				}
-				crawler.outputFormat("robots", url)
+				crawler.outputFormat("robots", url, "url", "robots")
 				_ = crawler.C.Visit(url)
 			}
 		}
@@ -402,19 +436,19 @@ func (crawler *Crawler) ParseOtherSources(includeSubs bool, includeOtherSourceRe
 		}
 
 		if includeOtherSourceResult {
-			crawler.outputFormat("other-sources", url)
+			crawler.outputFormat("other-sources", url, "url", "other-sources")
 		}
 		_ = crawler.C.Visit(url)
 	}
 }
 
-func (crawler *Crawler) outputFormat(source string, output string) {
-	outputFormat := fmt.Sprintf("[%s] - %s", source, output)
+func (crawler *Crawler) outputFormat(source string, output string, outputType string, rawLabel string) {
+	outputFormat := fmt.Sprintf("[%s] - %s", rawLabel, output)
 	if crawler.JsonOutput {
 		sout := SpiderOutput{
 			Input:      crawler.Input,
 			Source:     source,
-			OutputType: "url",
+			OutputType: outputType,
 			Output:     output,
 		}
 		if data, err := jsoniter.MarshalToString(sout); err == nil {
@@ -466,22 +500,7 @@ func (crawler *Crawler) findAWSS3(resp string) {
 	aws := GetAWSS3(resp)
 	for _, e := range aws {
 		if !crawler.awsSet.Duplicate(e) {
-			outputFormat := fmt.Sprintf("[aws-s3] - %s", e)
-			if crawler.JsonOutput {
-				sout := SpiderOutput{
-					Input:      crawler.Input,
-					Source:     "body",
-					OutputType: "aws",
-					Output:     e,
-				}
-				if data, err := jsoniter.MarshalToString(sout); err == nil {
-					outputFormat = data
-				}
-			}
-			fmt.Println(outputFormat)
-			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
-			}
+			crawler.outputFormat("body", e, "was", "aws-s3")
 		}
 	}
 }
