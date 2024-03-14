@@ -3,14 +3,18 @@ package core
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
+	sitemap "github.com/oxffaa/gopher-parse-sitemap"
 
 	"github.com/benji-bou/gospider/stringset"
 	"github.com/gocolly/colly/v2"
@@ -143,6 +147,39 @@ func (crawler *Crawler) feedLinkfinder(jsFileUrl string, OutputType string, sour
 		_ = crawler.LinkFinderCollector.Visit(jsFileUrl)
 
 	}
+}
+
+func (crawler *Crawler) StartAll(linkfinder bool, sitemap bool, robots bool, otherSource, includeSubs, includeOtherSourceResult bool) {
+	var gr sync.WaitGroup
+	gr.Add(1)
+	go func() {
+		crawler.Start(linkfinder)
+		gr.Done()
+	}()
+	if sitemap {
+		gr.Add(1)
+		go func() {
+			crawler.ParseSiteMap()
+			gr.Done()
+		}()
+	}
+	if robots {
+		gr.Add(1)
+		go func() {
+			crawler.ParseRobots()
+			gr.Done()
+		}()
+	}
+	if otherSource {
+		gr.Add(1)
+		go func() {
+			crawler.ParseOtherSources(includeSubs, includeOtherSourceResult)
+			gr.Done()
+		}()
+	}
+	gr.Wait()
+	crawler.C.Wait()
+	crawler.LinkFinderCollector.Wait()
 }
 
 func (crawler *Crawler) Start(linkfinder bool) {
@@ -343,6 +380,90 @@ func (crawler *Crawler) Start(linkfinder bool) {
 	}
 }
 
+func (crawler *Crawler) ParseSiteMap() {
+	sitemapUrls := []string{"/sitemap.xml", "/sitemap_news.xml", "/sitemap_index.xml", "/sitemap-index.xml", "/sitemapindex.xml",
+		"/sitemap-news.xml", "/post-sitemap.xml", "/page-sitemap.xml", "/portfolio-sitemap.xml", "/home_slider-sitemap.xml", "/category-sitemap.xml",
+		"/author-sitemap.xml"}
+
+	for _, path := range sitemapUrls {
+		// Ignore error when that not valid sitemap.xml path
+		Logger.Infof("Trying to find %s", crawler.site.String()+path)
+		_ = sitemap.ParseFromSite(crawler.site.String()+path, func(entry sitemap.Entry) error {
+			url := entry.GetLocation()
+			crawler.outputFormat("sitemap", url, "url", "sitemap")
+			_ = crawler.C.Visit(url)
+			return nil
+		})
+	}
+}
+
+func (crawler *Crawler) ParseRobots() {
+	robotsURL := crawler.site.String() + "/robots.txt"
+
+	resp, err := http.Get(robotsURL)
+	if err != nil {
+		return
+	}
+	if resp.StatusCode == 200 {
+		Logger.Infof("Found robots.txt: %s", robotsURL)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return
+		}
+		lines := strings.Split(string(body), "\n")
+
+		var re = regexp.MustCompile(".*llow: ")
+		for _, line := range lines {
+			if strings.Contains(line, "llow: ") {
+				url := re.ReplaceAllString(line, "")
+				url = FixUrl(crawler.site, url)
+				if url == "" {
+					continue
+				}
+				crawler.outputFormat("robots", url, "url", "robots")
+				_ = crawler.C.Visit(url)
+			}
+		}
+	}
+}
+
+func (crawler *Crawler) ParseOtherSources(includeSubs bool, includeOtherSourceResult bool) {
+	urls := OtherSources(crawler.site.Hostname(), includeSubs)
+	for _, url := range urls {
+		url = strings.TrimSpace(url)
+		if len(url) == 0 {
+			continue
+		}
+
+		if includeOtherSourceResult {
+			crawler.outputFormat("other-sources", url, "url", "other-sources")
+		}
+		_ = crawler.C.Visit(url)
+	}
+}
+
+func (crawler *Crawler) outputFormat(source string, output string, outputType string, rawLabel string) {
+	outputFormat := fmt.Sprintf("[%s] - %s", rawLabel, output)
+	if crawler.JsonOutput {
+		sout := SpiderOutput{
+			Input:      crawler.Input,
+			Source:     source,
+			OutputType: outputType,
+			Output:     output,
+		}
+		if data, err := jsoniter.MarshalToString(sout); err == nil {
+			outputFormat = data
+		}
+	} else if crawler.Quiet {
+		outputFormat = output
+	}
+	fmt.Println(outputFormat)
+	if crawler.Output != nil {
+		crawler.Output.WriteToFile(outputFormat)
+	}
+
+}
+
 // Find subdomains from response
 func (crawler *Crawler) findSubdomains(resp string) {
 	subs := GetSubdomains(resp, crawler.domain)
@@ -379,22 +500,7 @@ func (crawler *Crawler) findAWSS3(resp string) {
 	aws := GetAWSS3(resp)
 	for _, e := range aws {
 		if !crawler.awsSet.Duplicate(e) {
-			outputFormat := fmt.Sprintf("[aws-s3] - %s", e)
-			if crawler.JsonOutput {
-				sout := SpiderOutput{
-					Input:      crawler.Input,
-					Source:     "body",
-					OutputType: "aws",
-					Output:     e,
-				}
-				if data, err := jsoniter.MarshalToString(sout); err == nil {
-					outputFormat = data
-				}
-			}
-			fmt.Println(outputFormat)
-			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
-			}
+			crawler.outputFormat("body", e, "was", "aws-s3")
 		}
 	}
 }

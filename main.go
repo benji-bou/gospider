@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	jsoniter "github.com/json-iterator/go"
-
 	"github.com/benji-bou/gospider/core"
 
 	"github.com/sirupsen/logrus"
@@ -161,67 +159,8 @@ func run(cmd *cobra.Command, _ []string) {
 					continue
 				}
 
-				var siteWg sync.WaitGroup
-
 				crawler := NewCobraCrawler(site, cmd)
-				siteWg.Add(1)
-				go func() {
-					defer siteWg.Done()
-					crawler.Start(linkfinder)
-				}()
-
-				// Brute force Sitemap path
-				if sitemap {
-					siteWg.Add(1)
-					go core.ParseSiteMap(site, crawler, crawler.C, &siteWg)
-				}
-
-				// Find Robots.txt
-				if robots {
-					siteWg.Add(1)
-					go core.ParseRobots(site, crawler, crawler.C, &siteWg)
-				}
-
-				if otherSource {
-					siteWg.Add(1)
-					go func() {
-						defer siteWg.Done()
-						urls := core.OtherSources(site.Hostname(), includeSubs)
-						for _, url := range urls {
-							url = strings.TrimSpace(url)
-							if len(url) == 0 {
-								continue
-							}
-
-							outputFormat := fmt.Sprintf("[other-sources] - %s", url)
-							if includeOtherSourceResult {
-								if crawler.JsonOutput {
-									sout := core.SpiderOutput{
-										Input:      crawler.Input,
-										Source:     "other-sources",
-										OutputType: "url",
-										Output:     url,
-									}
-									if data, err := jsoniter.MarshalToString(sout); err == nil {
-										outputFormat = data
-									}
-								} else if crawler.Quiet {
-									outputFormat = url
-								}
-								fmt.Println(outputFormat)
-
-								if crawler.Output != nil {
-									crawler.Output.WriteToFile(outputFormat)
-								}
-							}
-
-							_ = crawler.C.Visit(url)
-						}
-					}()
-				}
-				siteWg.Wait()
-				crawler.C.Wait()
-				crawler.LinkFinderCollector.Wait()
+				crawler.StartAll(linkfinder, sitemap, robots, otherSource, includeSubs, includeOtherSourceResult)
 			}
 		}()
 	}
@@ -232,15 +171,6 @@ func run(cmd *cobra.Command, _ []string) {
 	close(inputChan)
 	wg.Wait()
 	core.Logger.Info("Done.")
-}
-
-func Examples() {
-	h := "\n\nExamples Command:\n"
-	h += `gospider -q -s "https://target.com/"` + "\n"
-	h += `gospider -s "https://target.com/" -o output -c 10 -d 1` + "\n"
-	h += `gospider -s "https://target.com/" -o output -c 10 -d 1 --other-source` + "\n"
-	h += `echo 'http://target.com | gospider -o output -c 10 -d 1 --other-source` + "\n"
-	fmt.Println(h)
 }
 
 func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
@@ -320,4 +250,13 @@ func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
 	opt = append(opt, core.WithCollyConfig(collyConfig...))
 
 	return core.NewCrawler(site)
+}
+
+func Examples() {
+	h := "\n\nExamples Command:\n"
+	h += `gospider -q -s "https://target.com/"` + "\n"
+	h += `gospider -s "https://target.com/" -o output -c 10 -d 1` + "\n"
+	h += `gospider -s "https://target.com/" -o output -c 10 -d 1 --other-source` + "\n"
+	h += `echo 'http://target.com | gospider -o output -c 10 -d 1 --other-source` + "\n"
+	fmt.Println(h)
 }
