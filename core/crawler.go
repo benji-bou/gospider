@@ -40,7 +40,7 @@ var DefaultHTTPTransport = &http.Transport{
 type Crawler struct {
 	C                   *colly.Collector
 	LinkFinderCollector *colly.Collector
-	Output              *Output
+	Output              io.Writer
 
 	collectorOpt         []colly.CollectorOption
 	collyConfigrationOpt []CollyConfigurator
@@ -134,7 +134,7 @@ func (crawler *Crawler) feedLinkfinder(jsFileUrl string, OutputType string, sour
 		}
 
 		if crawler.Output != nil {
-			crawler.Output.WriteToFile(outputFormat)
+			crawler.Output.Write([]byte(outputFormat))
 		}
 
 		// If JS file is minimal format. Try to find original format
@@ -212,7 +212,7 @@ func (crawler *Crawler) Start(linkfinder bool) {
 				fmt.Println(outputFormat)
 			}
 			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
+				crawler.Output.Write([]byte(outputFormat))
 			}
 			_ = e.Request.Visit(urlString)
 		}
@@ -238,7 +238,7 @@ func (crawler *Crawler) Start(linkfinder bool) {
 				fmt.Println(outputFormat)
 			}
 			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
+				crawler.Output.Write([]byte(outputFormat))
 			}
 
 		}
@@ -265,7 +265,7 @@ func (crawler *Crawler) Start(linkfinder bool) {
 				fmt.Println(outputFormat)
 			}
 			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
+				crawler.Output.Write([]byte(outputFormat))
 			}
 		}
 
@@ -315,7 +315,7 @@ func (crawler *Crawler) Start(linkfinder bool) {
 			}
 			fmt.Println(outputFormat)
 			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
+				crawler.Output.Write([]byte(outputFormat))
 			}
 			if InScope(response.Request.URL, crawler.C.URLFilters) {
 				crawler.findSubdomains(respStr)
@@ -328,7 +328,7 @@ func (crawler *Crawler) Start(linkfinder bool) {
 					fmt.Println(outputFormat)
 				}
 				if crawler.Output != nil {
-					crawler.Output.WriteToFile(outputFormat)
+					crawler.Output.Write([]byte(outputFormat))
 				}
 			}
 		}
@@ -370,7 +370,7 @@ func (crawler *Crawler) Start(linkfinder bool) {
 		}
 
 		if crawler.Output != nil {
-			crawler.Output.WriteToFile(outputFormat)
+			crawler.Output.Write([]byte(outputFormat))
 		}
 	})
 
@@ -489,7 +489,7 @@ func (crawler *Crawler) findSubdomains(resp string) {
 				fmt.Println(outputFormat)
 			}
 			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
+				crawler.Output.Write([]byte(outputFormat))
 			}
 		}
 	}
@@ -526,7 +526,7 @@ func (crawler *Crawler) setupLinkFinder() {
 			fmt.Println(outputFormat)
 
 			if crawler.Output != nil {
-				crawler.Output.WriteToFile(outputFormat)
+				crawler.Output.Write([]byte(outputFormat))
 			}
 
 			if InScope(response.Request.URL, crawler.C.URLFilters) {
@@ -565,7 +565,7 @@ func (crawler *Crawler) setupLinkFinder() {
 					fmt.Println(outputFormat)
 
 					if crawler.Output != nil {
-						crawler.Output.WriteToFile(outputFormat)
+						crawler.Output.Write([]byte(outputFormat))
 					}
 					rebuildURL := ""
 					if !currentPathURLerr {
@@ -602,7 +602,7 @@ func (crawler *Crawler) setupLinkFinder() {
 						fmt.Println(outputFormat)
 
 						if crawler.Output != nil {
-							crawler.Output.WriteToFile(outputFormat)
+							crawler.Output.Write([]byte(outputFormat))
 						}
 						_ = crawler.C.Visit(rebuildURL)
 					}
@@ -635,7 +635,7 @@ func (crawler *Crawler) setupLinkFinder() {
 								fmt.Println(outputFormat)
 
 								if crawler.Output != nil {
-									crawler.Output.WriteToFile(outputFormat)
+									crawler.Output.Write([]byte(outputFormat))
 								}
 								_ = crawler.C.Visit(urlWithJSHostIn) //not print care for lost link
 							}
@@ -653,7 +653,7 @@ func (crawler *Crawler) setupLinkFinder() {
 					}
 
 					if crawler.Output != nil {
-						crawler.Output.WriteToFile(outputFormat)
+						crawler.Output.Write([]byte(outputFormat))
 					}
 				}
 			}
