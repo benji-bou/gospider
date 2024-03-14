@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sync"
@@ -27,6 +28,14 @@ func (o *Output) WriteToFile(msg string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	_, _ = o.f.WriteString(msg + "\n")
+}
+
+func (o *Output) Write(msg []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	b := bytes.NewBuffer(msg)
+	b.Write([]byte("\n"))
+	return o.f.Write(b.Bytes())
 }
 
 func (o *Output) Close() {
