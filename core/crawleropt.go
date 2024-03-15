@@ -3,6 +3,7 @@ package core
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,8 +17,8 @@ import (
 )
 
 type CrawlerOption func(crawler *Crawler)
-type CollyConfigurator func(crawler *Crawler, c *colly.Collector) error
-type HTTPClientConfigurator func(crawler *Crawler, client *http.Client)
+type CollyConfigurator func(c *colly.Collector) error
+type HTTPClientConfigurator func(client *http.Client)
 
 func WithCollyConfig(opt ...CollyConfigurator) CrawlerOption {
 	return func(crawler *Crawler) {
@@ -25,15 +26,14 @@ func WithCollyConfig(opt ...CollyConfigurator) CrawlerOption {
 	}
 }
 
-func WithOuput(outputPath string) CrawlerOption {
+func WithOutput(writer ...io.Writer) CrawlerOption {
 	return func(crawler *Crawler) {
-		var output *Output
-
-		if outputPath != "" {
-			filename := strings.ReplaceAll(crawler.site.Hostname(), ".", "_")
-			output = NewOutput(outputPath, filename)
+		if crawler.Output != nil {
+			outputW := append([]io.Writer{crawler.Output}, writer...)
+			crawler.Output = io.MultiWriter(outputW...)
+		} else {
+			crawler.Output = io.MultiWriter(writer...)
 		}
-		crawler.Output = output
 	}
 }
 
@@ -49,16 +49,16 @@ func WithFilterLength(filterLength string) CrawlerOption {
 	}
 }
 
-func WithQuiet(quiet bool) CrawlerOption {
-	return func(crawler *Crawler) {
-		crawler.Quiet = quiet
-	}
-}
-func WithJsonOutput(json bool) CrawlerOption {
-	return func(crawler *Crawler) {
-		crawler.JsonOutput = json
-	}
-}
+// func WithQuiet(quiet bool) CrawlerOption {
+// 	return func(crawler *Crawler) {
+// 		crawler.Quiet = quiet
+// 	}
+// }
+// func WithJsonOutput(json bool) CrawlerOption {
+// 	return func(crawler *Crawler) {
+// 		crawler.JsonOutput = json
+// 	}
+// }
 
 func WithCollyOption(options ...colly.CollectorOption) CrawlerOption {
 	return func(crawler *Crawler) {
@@ -74,30 +74,39 @@ func WithDefaultColly(maxDepth int) CrawlerOption {
 	)
 }
 
-func WithLength(length bool) CrawlerOption {
-	return func(crawler *Crawler) {
-		crawler.length = length
-	}
-}
-func WithRaw(raw bool) CrawlerOption {
-	return func(crawler *Crawler) {
-		crawler.raw = raw
-	}
+// func WithLength(length bool) CrawlerOption {
+// 	return func(crawler *Crawler) {
+// 		crawler.length = length
+// 	}
+// }
+// func WithRaw(raw bool) CrawlerOption {
+// 	return func(crawler *Crawler) {
+// 		crawler.raw = raw
+// 	}
+// }
+
+// func WithSubs(subs bool) CollyConfigurator {
+// 	return func(site *url.URL, c *colly.Collector) error {
+// 		if subs {
+// 			return WithRegexpFilter(site.Hostname())(site, c)
+// 		} else {
+// 			return WithRegexpFilter("(?:https|http)://"+site.Hostname())(site, c)
+// 		}
+// 	}
+// }
+
+func WithScope(scope string) CollyConfigurator {
+	return WithRegexpFilter(scope)
 }
 
-func WithSubs(subs bool) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
-		if subs {
-			return WithRegexpFilter(crawler.site.Hostname())(crawler, c)
-		} else {
-			return WithRegexpFilter("(?:https|http)://"+crawler.site.Hostname())(crawler, c)
-		}
-	}
-}
+// func WithTargetAsScope() CollyConfigurator {
+// 	return func(target *url.URL, c *colly.Collector) error {
+// 		return WithRegexpFilter(target.String())(target, c)
+// 	}
+// }
 
 func WithDisallowedRegexFilter(regFilter string) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
-
+	return func(c *colly.Collector) error {
 		reg, err := regexp.Compile(regFilter)
 		if err != nil {
 			return fmt.Errorf("failed to compile disallowedRegex filter %s: %w", regFilter, err)
@@ -115,8 +124,7 @@ func WithDefaultDisalowedRegexp() CollyConfigurator {
 }
 
 func WithRegexpFilter(regFilter string) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
-
+	return func(c *colly.Collector) error {
 		reg, err := regexp.Compile(regFilter)
 		if err != nil {
 			return fmt.Errorf("failed to compile Regex filter %s: %w", regFilter, err)
@@ -134,7 +142,7 @@ func WithWhiteListDomain(whiteListDomain string) CollyConfigurator {
 }
 
 func WithLimit(concurrent int, delay int, randomDelay int) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
+	return func(c *colly.Collector) error {
 		return c.Limit(&colly.LimitRule{
 			DomainGlob:  "*",
 			Parallelism: concurrent,
@@ -145,25 +153,25 @@ func WithLimit(concurrent int, delay int, randomDelay int) CollyConfigurator {
 }
 
 func WithHTTPClient(client *http.Client) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
+	return func(c *colly.Collector) error {
 		c.SetClient(client)
 		return nil
 	}
 }
 
 func WithHTTPClientOpt(opt ...HTTPClientConfigurator) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
+	return func(c *colly.Collector) error {
 		client := &http.Client{}
 		client.Transport = DefaultHTTPTransport
 		for _, o := range opt {
-			o(crawler, client)
+			o(client)
 		}
-		return WithHTTPClient(client)(crawler, crawler.C)
+		return WithHTTPClient(client)(c)
 	}
 }
 
 func WithBurpFile(burpFile string) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
+	return func(c *colly.Collector) error {
 		bF, err := os.Open(burpFile)
 		if err != nil {
 			return fmt.Errorf("Failed to open Burp File: %w", err)
@@ -192,7 +200,7 @@ func WithBurpFile(burpFile string) CollyConfigurator {
 }
 
 func WithCookie(cookie string) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
+	return func(c *colly.Collector) error {
 		c.OnRequest(func(r *colly.Request) {
 			r.Headers.Add("Cookie", cookie)
 		})
@@ -201,7 +209,7 @@ func WithCookie(cookie string) CollyConfigurator {
 }
 
 func WithHeader(headers ...string) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
+	return func(c *colly.Collector) error {
 		for _, h := range headers {
 			headerArgs := strings.SplitN(h, ":", 2)
 			headerKey := strings.TrimSpace(headerArgs[0])
@@ -215,7 +223,7 @@ func WithHeader(headers ...string) CollyConfigurator {
 }
 
 func WithUserAgent(randomUA string) CollyConfigurator {
-	return func(crawler *Crawler, c *colly.Collector) error {
+	return func(c *colly.Collector) error {
 		switch ua := strings.ToLower(randomUA); {
 		case ua == "mobi":
 			extensions.RandomMobileUserAgent(c)
@@ -229,7 +237,7 @@ func WithUserAgent(randomUA string) CollyConfigurator {
 }
 
 func WithHTTPProxy(proxy string) HTTPClientConfigurator {
-	return func(crawler *Crawler, client *http.Client) {
+	return func(client *http.Client) {
 		if proxy != "" {
 			Logger.Infof("Proxy: %s", proxy)
 			pU, err := url.Parse(proxy)
@@ -244,7 +252,7 @@ func WithHTTPProxy(proxy string) HTTPClientConfigurator {
 }
 
 func WithHTTPTimeout(timeout int) HTTPClientConfigurator {
-	return func(crawler *Crawler, client *http.Client) {
+	return func(client *http.Client) {
 		if timeout == 0 {
 			Logger.Info("Your input timeout is 0. Gospider will set it to 10 seconds")
 			client.Timeout = 10 * time.Second
@@ -255,14 +263,15 @@ func WithHTTPTimeout(timeout int) HTTPClientConfigurator {
 }
 
 func WithHTTPNoRedirect() HTTPClientConfigurator {
-	return func(crawler *Crawler, client *http.Client) {
+	return func(client *http.Client) {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			nextLocation := req.Response.Header.Get("Location")
 			Logger.Debugf("Found Redirect: %s", nextLocation)
 			// Allow in redirect from http to https or in same hostname
 			// We just check contain hostname or not because we set URLFilter in main collector so if
 			// the URL is https://otherdomain.com/?url=maindomain.com, it will reject it
-			if strings.Contains(nextLocation, crawler.site.Hostname()) {
+			last := via[len(via)-1].URL.Hostname()
+			if strings.Contains(nextLocation, last) {
 				Logger.Infof("Redirecting to: %s", nextLocation)
 				return nil
 			}

@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
-	"strings"
-	"sync"
 
 	"github.com/benji-bou/gospider/core"
+	"github.com/k0kubun/pp/v3"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -110,86 +109,51 @@ func run(cmd *cobra.Command, _ []string) {
 		}
 	}
 
-	stat, _ := os.Stdin.Stat()
-	// detect if anything came from std
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
-		sc := bufio.NewScanner(os.Stdin)
-		for sc.Scan() {
-			target := strings.TrimSpace(sc.Text())
-			if err := sc.Err(); err == nil && target != "" {
-				siteList = append(siteList, target)
-			}
-		}
-	}
-
 	// Check again to make sure at least one site in slice
 	if len(siteList) == 0 {
 		core.Logger.Info("No site in list. Please check your site input again")
 		os.Exit(1)
 	}
 
-	threads, _ := cmd.Flags().GetInt("threads")
-	sitemap, _ := cmd.Flags().GetBool("sitemap")
-	linkfinder, _ := cmd.Flags().GetBool("js")
-	robots, _ := cmd.Flags().GetBool("robots")
-	otherSource, _ := cmd.Flags().GetBool("other-source")
-	includeSubs, _ := cmd.Flags().GetBool("include-subs")
-	includeOtherSourceResult, _ := cmd.Flags().GetBool("include-other-source")
+	crawler := NewCobraCrawler(cmd, siteList)
 
-	// disable all options above
-	base, _ := cmd.Flags().GetBool("base")
-	if base {
-		linkfinder = false
-		robots = false
-		otherSource = false
-		includeSubs = false
-		includeOtherSourceResult = false
-	}
+	outputC, errC := crawler.Start(siteList...)
 
-	var wg sync.WaitGroup
-	inputChan := make(chan string, threads)
-	for i := 0; i < threads; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for rawSite := range inputChan {
-				site, err := url.Parse(rawSite)
-				if err != nil {
-					logrus.Errorf("Failed to parse %s: %s", rawSite, err)
-					continue
-				}
-
-				crawler := NewCobraCrawler(site, cmd)
-				crawler.StartAll(linkfinder, sitemap, robots, otherSource, includeSubs, includeOtherSourceResult)
+	for {
+		select {
+		case res, ok := <-outputC:
+			if !ok {
+				return
 			}
-		}()
-	}
+			pp.Println(res)
 
-	for _, site := range siteList {
-		inputChan <- site
+		case e, ok := <-errC:
+			if !ok {
+				return
+			}
+
+			slog.Error(e.Error())
+		}
 	}
-	close(inputChan)
-	wg.Wait()
-	core.Logger.Info("Done.")
 }
 
-func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
+func NewCobraCrawler(cmd *cobra.Command, siteList []string) *core.Crawler {
 	// Setup Crawler Options based on cobra flags
 	opt := make([]core.CrawlerOption, 0, 8)
 	maxDepth, _ := cmd.Flags().GetInt("depth")
 	opt = append(opt, core.WithDefaultColly(maxDepth))
-	quiet, _ := cmd.Flags().GetBool("quiet")
-	opt = append(opt, core.WithQuiet(quiet))
-	jsonOutput, _ := cmd.Flags().GetBool("json")
-	opt = append(opt, core.WithJsonOutput(jsonOutput))
-	length, _ := cmd.Flags().GetBool("length")
-	opt = append(opt, core.WithLength(length))
-	raw, _ := cmd.Flags().GetBool("raw")
-	opt = append(opt, core.WithRaw(raw))
-	outputFolder, _ := cmd.Flags().GetString("output")
-	if outputFolder != "" {
-		opt = append(opt, core.WithOuput(outputFolder))
-	}
+	// quiet, _ := cmd.Flags().GetBool("quiet")
+	// opt = append(opt, core.WithQuiet(quiet))
+	// jsonOutput, _ := cmd.Flags().GetBool("json")
+	// opt = append(opt, core.WithJsonOutput(jsonOutput))
+	// length, _ := cmd.Flags().GetBool("length")
+	// opt = append(opt, core.WithLength(length))
+	// raw, _ := cmd.Flags().GetBool("raw")
+	// opt = append(opt, core.WithRaw(raw))
+	// // outputFolder, _ := cmd.Flags().GetString("output")
+	// if outputFolder != "" {
+	// 	opt = append(opt, core.WithOuput(outputFolder))
+	// }
 	filterLength, _ := cmd.Flags().GetString("filter-length")
 	if filterLength != "" {
 		opt = append(opt, core.WithFilterLength(filterLength))
@@ -226,8 +190,8 @@ func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
 	}
 	randomUA, _ := cmd.Flags().GetString("user-agent")
 	collyConfig = append(collyConfig, core.WithUserAgent(randomUA))
-	subs, _ := cmd.Flags().GetBool("subs")
-	collyConfig = append(collyConfig, core.WithSubs(subs))
+	// subs, _ := cmd.Flags().GetBool("subs")
+	// collyConfig = append(collyConfig, core.WithSubs(subs))
 	concurrent, _ := cmd.Flags().GetInt("concurrent")
 	delay, _ := cmd.Flags().GetInt("delay")
 	randomDelay, _ := cmd.Flags().GetInt("random-delay")
@@ -246,10 +210,18 @@ func NewCobraCrawler(site *url.URL, cmd *cobra.Command) *core.Crawler {
 		collyConfig = append(collyConfig, core.WithRegexpFilter(whiteListDomain))
 	}
 
+	for _, s := range siteList {
+		u, e := url.Parse(s)
+		if e != nil {
+			continue
+		}
+		collyConfig = append(collyConfig, core.WithScope(u.Hostname()))
+	}
+
 	//Adding CollyConfigurations to the crawler options
 	opt = append(opt, core.WithCollyConfig(collyConfig...))
 
-	return core.NewCrawler(site)
+	return core.NewCrawler(opt...)
 }
 
 func Examples() {
