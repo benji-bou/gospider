@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/benji-bou/gospider/core"
 	"github.com/k0kubun/pp/v3"
@@ -116,14 +118,23 @@ func run(cmd *cobra.Command, _ []string) {
 	}
 
 	crawler := NewCobraCrawler(cmd, siteList)
-
-	outputC, errC := crawler.Start(siteList...)
-
+	inputC := make(chan string)
+	ctx, _ := context.WithDeadline(context.Background(), time.Now().Add(30*time.Second))
+	outputC, errC := crawler.StreamScrawl(ctx, inputC)
+	go func(siteList []string) {
+		for _, s := range siteList {
+			inputC <- s
+		}
+	}(siteList)
 	for {
 		select {
 		case res, ok := <-outputC:
 			if !ok {
 				return
+			}
+			for _, nextTarget := range res.KeepCrawling() {
+				go func(nT string) { inputC <- nextTarget }(nextTarget)
+
 			}
 			pp.Println(res)
 

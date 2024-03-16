@@ -68,7 +68,7 @@ func NewCrawler(opt ...CrawlerOption) *Crawler {
 	return crawler
 }
 
-func (crawler *Crawler) handleResult(c chan<- SpiderOutput, output SpiderOutput) {
+func (crawler *Crawler) handleResult(c chan<- SpiderReport, output SpiderReport) {
 
 	if output.Output == "" {
 		return
@@ -99,12 +99,12 @@ func (crawler *Crawler) getTarget(site string) (*url.URL, string, error) {
 	return target, domain, err
 }
 
-func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Collector) <-chan SpiderOutput {
-	return chantools.New(func(oC chan<- SpiderOutput, params ...any) {
+func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Collector) <-chan SpiderReport {
+	return chantools.New(func(oC chan<- SpiderReport, params ...any) {
 		c := params[0].(*colly.Collector)
 		c.OnHTML("[href]", func(e *colly.HTMLElement) {
 			urlString := e.Request.AbsoluteURL(e.Attr("href"))
-			oC <- SpiderOutput{
+			oC <- SpiderReport{
 				Output:     urlString,
 				OutputType: Ref,
 				Source:     "body",
@@ -115,7 +115,7 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 		// Handle form
 		c.OnHTML("form[action]", func(e *colly.HTMLElement) {
 			formUrl := e.Request.URL.String()
-			oC <- SpiderOutput{
+			oC <- SpiderReport{
 				Output:     formUrl,
 				OutputType: Form,
 				Source:     "body",
@@ -127,7 +127,7 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 		// Find Upload Form
 		c.OnHTML(`input[type="file"]`, func(e *colly.HTMLElement) {
 			uploadUrl := e.Request.URL.String()
-			oC <- SpiderOutput{
+			oC <- SpiderReport{
 				Output:     uploadUrl,
 				OutputType: Upload,
 				Source:     "body",
@@ -138,7 +138,7 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 		// Handle js files
 		c.OnHTML("[src]", func(e *colly.HTMLElement) {
 			jsFileUrl := e.Request.AbsoluteURL(e.Attr("src"))
-			oC <- SpiderOutput{
+			oC <- SpiderReport{
 				Output:     jsFileUrl,
 				OutputType: Src,
 				Source:     "body",
@@ -151,7 +151,7 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 			if len(crawler.filterLength_slice) == 0 || !contains(crawler.filterLength_slice, len(respStr)) {
 				// Verify which link is working
 				u := response.Request.URL.String()
-				oC <- SpiderOutput{
+				oC <- SpiderReport{
 					Output:     u,
 					OutputType: Url,
 					Source:     "body",
@@ -176,7 +176,7 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 			}
 			respStr := DecodeChars(string(response.Body))
 			u := response.Request.URL.String()
-			oC <- SpiderOutput{
+			oC <- SpiderReport{
 				Output:     u,
 				OutputType: Url,
 				Source:     "body",
@@ -187,14 +187,14 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 			}
 
 		})
-	}, chantools.WithParam[SpiderOutput](c), chantools.WithContext[SpiderOutput](ctx))
+	}, chantools.WithParam[SpiderReport](c), chantools.WithContext[SpiderReport](ctx))
 
 	// Handle url
 }
 
-func (crawler *Crawler) Start(site ...string) (<-chan SpiderOutput, <-chan error) {
+func (crawler *Crawler) StreamScrawl(ctx context.Context, siteC <-chan string) (<-chan SpiderReport, <-chan error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	return chantools.NewWithErr(func(outputC chan<- SpiderOutput, errC chan<- error, params ...any) {
+	return chantools.NewWithErr(func(outputC chan<- SpiderReport, errC chan<- error, params ...any) {
 		cancel := params[0].(context.CancelFunc)
 
 		c, err := crawler.provisionCollector()
@@ -202,7 +202,41 @@ func (crawler *Crawler) Start(site ...string) (<-chan SpiderOutput, <-chan error
 			errC <- fmt.Errorf("failed to provision collector: %w", err)
 			return
 		}
-		chantools.ForEach(crawler.configCollectorListener(ctx, c), func(value SpiderOutput) {
+		chantools.ForEach(crawler.configCollectorListener(ctx, c), func(value SpiderReport) {
+			value = value.FixUrl()
+			crawler.handleResult(outputC, value)
+		})
+	L:
+		for {
+			select {
+			case s, ok := <-siteC:
+				if !ok {
+					break L
+				}
+				e := c.Visit(s)
+				if e != nil {
+					errC <- e
+				}
+			case <-ctx.Done():
+				break L
+			}
+		}
+		c.Wait()
+		cancel()
+	}, chantools.WithParam[SpiderReport](cancel))
+}
+
+func (crawler *Crawler) Start(site ...string) (<-chan SpiderReport, <-chan error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	return chantools.NewWithErr(func(outputC chan<- SpiderReport, errC chan<- error, params ...any) {
+		cancel := params[0].(context.CancelFunc)
+
+		c, err := crawler.provisionCollector()
+		if err != nil {
+			errC <- fmt.Errorf("failed to provision collector: %w", err)
+			return
+		}
+		chantools.ForEach(crawler.configCollectorListener(ctx, c), func(value SpiderReport) {
 			value = value.FixUrl()
 			crawler.handleResult(outputC, value)
 			for _, next := range value.KeepCrawling() {
@@ -214,7 +248,7 @@ func (crawler *Crawler) Start(site ...string) (<-chan SpiderOutput, <-chan error
 		}
 		c.Wait()
 		cancel()
-	}, chantools.WithParam[SpiderOutput](cancel))
+	}, chantools.WithParam[SpiderReport](cancel))
 }
 
 // func (crawler *Crawler) parseSiteMap(target *url.URL) []string {
@@ -324,7 +358,7 @@ func (crawler *Crawler) Start(site ...string) (<-chan SpiderOutput, <-chan error
 // 					var outputFormat string
 // 					// JS Regex Result
 // 					if crawler.JsonOutput {
-// 						sout := SpiderOutput{
+// 						sout := SpiderReport{
 // 							Input:      crawler.Input,
 // 							Source:     response.Request.URL.String(),
 // 							OutputType: "linkfinder",
@@ -360,7 +394,7 @@ func (crawler *Crawler) Start(site ...string) (<-chan SpiderOutput, <-chan error
 // 					} else if !crawler.urlSet.Duplicate(rebuildURL) {
 
 // 						if crawler.JsonOutput {
-// 							sout := SpiderOutput{
+// 							sout := SpiderReport{
 // 								Input:      crawler.Input,
 // 								Source:     response.Request.URL.String(),
 // 								OutputType: "linkfinder",
@@ -394,7 +428,7 @@ func (crawler *Crawler) Start(site ...string) (<-chan SpiderOutput, <-chan error
 // 							} else {
 
 // 								if crawler.JsonOutput {
-// 									sout := SpiderOutput{
+// 									sout := SpiderReport{
 // 										Input:      crawler.Input,
 // 										Source:     response.Request.URL.String(),
 // 										OutputType: "linkfinder",

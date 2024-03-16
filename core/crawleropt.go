@@ -49,17 +49,6 @@ func WithFilterLength(filterLength string) CrawlerOption {
 	}
 }
 
-// func WithQuiet(quiet bool) CrawlerOption {
-// 	return func(crawler *Crawler) {
-// 		crawler.Quiet = quiet
-// 	}
-// }
-// func WithJsonOutput(json bool) CrawlerOption {
-// 	return func(crawler *Crawler) {
-// 		crawler.JsonOutput = json
-// 	}
-// }
-
 func WithCollyOption(options ...colly.CollectorOption) CrawlerOption {
 	return func(crawler *Crawler) {
 		crawler.collectorOpt = append(crawler.collectorOpt, options...)
@@ -74,36 +63,9 @@ func WithDefaultColly(maxDepth int) CrawlerOption {
 	)
 }
 
-// func WithLength(length bool) CrawlerOption {
-// 	return func(crawler *Crawler) {
-// 		crawler.length = length
-// 	}
-// }
-// func WithRaw(raw bool) CrawlerOption {
-// 	return func(crawler *Crawler) {
-// 		crawler.raw = raw
-// 	}
-// }
-
-// func WithSubs(subs bool) CollyConfigurator {
-// 	return func(site *url.URL, c *colly.Collector) error {
-// 		if subs {
-// 			return WithRegexpFilter(site.Hostname())(site, c)
-// 		} else {
-// 			return WithRegexpFilter("(?:https|http)://"+site.Hostname())(site, c)
-// 		}
-// 	}
-// }
-
 func WithScope(scope string) CollyConfigurator {
 	return WithRegexpFilter(scope)
 }
-
-// func WithTargetAsScope() CollyConfigurator {
-// 	return func(target *url.URL, c *colly.Collector) error {
-// 		return WithRegexpFilter(target.String())(target, c)
-// 	}
-// }
 
 func WithDisallowedRegexFilter(regFilter string) CollyConfigurator {
 	return func(c *colly.Collector) error {
