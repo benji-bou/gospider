@@ -5,15 +5,19 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/benji-bou/chantools"
 	"github.com/benji-bou/gospider/stringset"
 	"github.com/gocolly/colly/v2"
 	"github.com/gocolly/colly/v2/extensions"
+	sitemap "github.com/oxffaa/gopher-parse-sitemap"
 )
 
 var DefaultHTTPTransport = &http.Transport{
@@ -42,15 +46,9 @@ type Crawler struct {
 
 	set *stringset.StringFilter
 
-	// site       *url.URL
-	// domain     string
-	// Input      string
-	// Quiet      bool
-	// JsonOutput bool
-	// length     bool
-	// raw        bool
-	// subs       bool
-
+	sitemap            bool
+	robot              bool
+	othersources       bool
 	filterLength_slice []int
 }
 
@@ -101,8 +99,15 @@ func (crawler *Crawler) getTarget(site string) (*url.URL, string, error) {
 
 func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Collector) <-chan SpiderReport {
 	return chantools.New(func(oC chan<- SpiderReport, params ...any) {
+
 		c := params[0].(*colly.Collector)
+		ctx := params[1].(context.Context)
+		isDone := false
 		c.OnHTML("[href]", func(e *colly.HTMLElement) {
+			if isDone {
+				e.Request.Abort()
+				return
+			}
 			urlString := e.Request.AbsoluteURL(e.Attr("href"))
 			oC <- SpiderReport{
 				Output:     urlString,
@@ -114,6 +119,11 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 
 		// Handle form
 		c.OnHTML("form[action]", func(e *colly.HTMLElement) {
+			if isDone {
+				e.Request.Abort()
+				return
+			}
+
 			formUrl := e.Request.URL.String()
 			oC <- SpiderReport{
 				Output:     formUrl,
@@ -126,6 +136,11 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 
 		// Find Upload Form
 		c.OnHTML(`input[type="file"]`, func(e *colly.HTMLElement) {
+			if isDone {
+				e.Request.Abort()
+				return
+			}
+
 			uploadUrl := e.Request.URL.String()
 			oC <- SpiderReport{
 				Output:     uploadUrl,
@@ -137,6 +152,11 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 
 		// Handle js files
 		c.OnHTML("[src]", func(e *colly.HTMLElement) {
+			if isDone {
+				e.Request.Abort()
+				return
+			}
+
 			jsFileUrl := e.Request.AbsoluteURL(e.Attr("src"))
 			oC <- SpiderReport{
 				Output:     jsFileUrl,
@@ -147,6 +167,10 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 		})
 
 		c.OnResponse(func(response *colly.Response) {
+			if isDone {
+				return
+			}
+
 			respStr := DecodeChars(string(response.Body))
 			if len(crawler.filterLength_slice) == 0 || !contains(crawler.filterLength_slice, len(respStr)) {
 				// Verify which link is working
@@ -163,6 +187,11 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 		})
 
 		c.OnError(func(response *colly.Response, err error) {
+			if isDone {
+
+				return
+			}
+
 			// Logger.Debugf("Error request: %s - Status code: %v - Error: %s", response.Request.URL.String(), response.StatusCode, err)
 			/*
 				1xx Informational
@@ -185,55 +214,34 @@ func (crawler *Crawler) configCollectorListener(ctx context.Context, c *colly.Co
 				Err:        err,
 				Input:      response.Request.URL,
 			}
-
 		})
-	}, chantools.WithParam[SpiderReport](c), chantools.WithContext[SpiderReport](ctx))
+		c.OnRequest(func(r *colly.Request) {
+			slog.Info("new Request", "request", r.URL.String())
+			if isDone {
+
+				slog.Info("cancelling request due to end of work trigerred", "request", r.URL.String())
+				r.Abort()
+			}
+		})
+		<-ctx.Done()
+		isDone = true
+		c.Wait()
+
+	}, chantools.WithParam[SpiderReport](c), chantools.WithParam[SpiderReport](ctx))
 
 	// Handle url
 }
 
-func (crawler *Crawler) StreamScrawl(ctx context.Context, siteC <-chan string) (<-chan SpiderReport, <-chan error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	return chantools.NewWithErr(func(outputC chan<- SpiderReport, errC chan<- error, params ...any) {
-		cancel := params[0].(context.CancelFunc)
+func (crawler *Crawler) start(ctx context.Context, handleSiteIngestionBehavior func(c *colly.Collector, errC chan<- error)) (<-chan SpiderReport, <-chan error) {
 
+	return chantools.NewWithErr(func(outputC chan<- SpiderReport, errC chan<- error, params ...any) {
+		ctx := params[0].(context.Context)
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
 		c, err := crawler.provisionCollector()
 		if err != nil {
 			errC <- fmt.Errorf("failed to provision collector: %w", err)
-			return
-		}
-		chantools.ForEach(crawler.configCollectorListener(ctx, c), func(value SpiderReport) {
-			value = value.FixUrl()
-			crawler.handleResult(outputC, value)
-		})
-	L:
-		for {
-			select {
-			case s, ok := <-siteC:
-				if !ok {
-					break L
-				}
-				e := c.Visit(s)
-				if e != nil {
-					errC <- e
-				}
-			case <-ctx.Done():
-				break L
-			}
-		}
-		c.Wait()
-		cancel()
-	}, chantools.WithParam[SpiderReport](cancel))
-}
 
-func (crawler *Crawler) Start(site ...string) (<-chan SpiderReport, <-chan error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	return chantools.NewWithErr(func(outputC chan<- SpiderReport, errC chan<- error, params ...any) {
-		cancel := params[0].(context.CancelFunc)
-
-		c, err := crawler.provisionCollector()
-		if err != nil {
-			errC <- fmt.Errorf("failed to provision collector: %w", err)
 			return
 		}
 		chantools.ForEach(crawler.configCollectorListener(ctx, c), func(value SpiderReport) {
@@ -243,75 +251,132 @@ func (crawler *Crawler) Start(site ...string) (<-chan SpiderReport, <-chan error
 				c.Visit(next)
 			}
 		})
-		for _, s := range site {
-			c.Visit(s)
-		}
+		handleSiteIngestionBehavior(c, errC)
 		c.Wait()
-		cancel()
-	}, chantools.WithParam[SpiderReport](cancel))
+	}, chantools.WithParam[SpiderReport](ctx))
+
 }
 
-// func (crawler *Crawler) parseSiteMap(target *url.URL) []string {
-// 	sitemapUrls := []string{"/sitemap.xml", "/sitemap_news.xml", "/sitemap_index.xml", "/sitemap-index.xml", "/sitemapindex.xml",
-// 		"/sitemap-news.xml", "/post-sitemap.xml", "/page-sitemap.xml", "/portfolio-sitemap.xml", "/home_slider-sitemap.xml", "/category-sitemap.xml",
-// 		"/author-sitemap.xml"}
+func (crawler *Crawler) additionalTarget(site string) []string {
+	u, err := url.Parse(site)
+	res := []string{}
+	if err != nil {
+		return res
+	}
+	if crawler.sitemap {
+		res = append(res, crawler.parseSiteMap(u)...)
+	}
+	if crawler.robot {
+		robotsRes, err := crawler.parseRobots(u)
+		if err != nil {
+			slog.Warn("additional site from robots failed", "error", err)
 
-// 	res := []string{}
+		} else {
+			res = append(res, robotsRes...)
+		}
+	}
+	if crawler.othersources {
+		res = append(res, crawler.parseOtherSources(u)...)
+	}
+	return res
+}
 
-// 	for _, path := range sitemapUrls {
-// 		sitemap.ParseFromSite(target.String()+path, func(entry sitemap.Entry) error {
-// 			url := entry.GetLocation()
-// 			res = append(res, url)
-// 			return nil
-// 		})
-// 	}
-// 	return res
-// }
+func (crawler *Crawler) StreamScrawl(ctx context.Context, siteC <-chan string) (<-chan SpiderReport, <-chan error) {
 
-// func (crawler *Crawler) parseRobots(target *url.URL) ([]string, error) {
-// 	robotsURL := target.String() + "/robots.txt"
+	return crawler.start(ctx, func(c *colly.Collector, errC chan<- error) {
+	L:
+		for {
+			select {
+			case s, ok := <-siteC:
+				if !ok {
+					break L
+				}
+				e := c.Visit(s)
+				for _, additionalSite := range crawler.additionalTarget(s) {
+					c.Visit(additionalSite)
+				}
+				if e != nil {
+					errC <- e
+				}
+			case <-ctx.Done():
+				break L
+			}
+		}
 
-// 	resp, err := http.Get(robotsURL)
-// 	if err != nil {
-// 		return []string{}, err
-// 	}
-// 	if resp.StatusCode == 200 {
-// 		Logger.Infof("Found robots.txt: %s", robotsURL)
-// 		body, err := io.ReadAll(resp.Body)
-// 		if err != nil {
-// 			return []string{}, err
-// 		}
-// 		lines := strings.Split(string(body), "\n")
+	})
+}
 
-// 		var re = regexp.MustCompile(".*llow: ")
-// 		for _, line := range lines {
-// 			if strings.Contains(line, "llow: ") {
-// 				url := re.ReplaceAllString(line, "")
-// 				url = FixUrl(target, url)
-// 				if url == "" {
-// 					continue
-// 				}
-// 				crawler.outputFormat("robots", url, "url", "robots")
-// 				_ = crawler.C.Visit(url)
-// 			}
-// 		}
-// 	}
-// }
+func (crawler *Crawler) Start(site ...string) (<-chan SpiderReport, <-chan error) {
+	return crawler.start(context.Background(), func(c *colly.Collector, errC chan<- error) {
+		for _, s := range site {
+			c.Visit(s)
+			for _, additionalSite := range crawler.additionalTarget(s) {
+				c.Visit(additionalSite)
+			}
 
-// func (crawler *Crawler) ParseOtherSources(includeSubs bool, includeOtherSourceResult bool) {
-// 	urls := OtherSources(crawler.site.Hostname(), includeSubs)
-// 	for _, url := range urls {
-// 		url = strings.TrimSpace(url)
-// 		if len(url) == 0 {
-// 			continue
-// 		}
+		}
+	})
+}
 
-// 		if includeOtherSourceResult {
-// 			crawler.outputFormat("other-sources", url, "url", "other-sources")
-// 		}
-// 		_ = crawler.C.Visit(url)
-// 	}
-// }
+func (crawler *Crawler) parseSiteMap(target *url.URL) []string {
+	sitemapUrls := []string{"/sitemap.xml", "/sitemap_news.xml", "/sitemap_index.xml", "/sitemap-index.xml", "/sitemapindex.xml",
+		"/sitemap-news.xml", "/post-sitemap.xml", "/page-sitemap.xml", "/portfolio-sitemap.xml", "/home_slider-sitemap.xml", "/category-sitemap.xml",
+		"/author-sitemap.xml"}
+
+	res := []string{}
+
+	for _, path := range sitemapUrls {
+		sitemap.ParseFromSite(target.String()+path, func(entry sitemap.Entry) error {
+			url := entry.GetLocation()
+			res = append(res, url)
+			return nil
+		})
+	}
+	return res
+}
+
+func (crawler *Crawler) parseRobots(target *url.URL) ([]string, error) {
+	robotsURL := target.String() + "/robots.txt"
+	res := []string{}
+	resp, err := http.Get(robotsURL)
+	if err != nil {
+		return []string{}, err
+	}
+	if resp.StatusCode == 200 {
+		Logger.Infof("Found robots.txt: %s", robotsURL)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return []string{}, err
+		}
+		lines := strings.Split(string(body), "\n")
+
+		var re = regexp.MustCompile(".*llow: ")
+		for _, line := range lines {
+			if strings.Contains(line, "llow: ") {
+				url := re.ReplaceAllString(line, "")
+				url = FixUrl(target, url)
+				if url == "" {
+					continue
+				}
+				res = append(res, url)
+			}
+		}
+	}
+	return res, nil
+}
+
+func (crawler *Crawler) parseOtherSources(target *url.URL) []string {
+	urls := OtherSources(target.Hostname(), true)
+	res := make([]string, 0, len(urls))
+	for _, url := range urls {
+		url = strings.TrimSpace(url)
+		if len(url) == 0 {
+			continue
+		}
+		res = append(res, url)
+	}
+	return res
+}
 
 // Setup link finder
 // func (crawler *Crawler) setupLinkFinder() {

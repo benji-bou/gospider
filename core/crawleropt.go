@@ -55,6 +55,24 @@ func WithCollyOption(options ...colly.CollectorOption) CrawlerOption {
 	}
 }
 
+func WithSitemap() CrawlerOption {
+	return func(crawler *Crawler) {
+		crawler.sitemap = true
+	}
+}
+
+func WithRobot() CrawlerOption {
+	return func(crawler *Crawler) {
+		crawler.robot = true
+	}
+}
+
+func WithOtherSources() CrawlerOption {
+	return func(crawler *Crawler) {
+		crawler.othersources = true
+	}
+}
+
 func WithDefaultColly(maxDepth int) CrawlerOption {
 	return WithCollyOption(
 		colly.Async(true),
